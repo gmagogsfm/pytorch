@@ -178,6 +178,15 @@ struct TORCH_API CompilationUnit {
     return type->cast<c10::ClassType>();
   }
 
+  c10::EnumTypePtr get_enum(const c10::QualifiedName& name) const {
+    auto type = get_type(name);
+    if (!type) {
+      return nullptr;
+    }
+    return type->cast<c10::EnumType>();
+  }
+
+
   c10::InterfaceTypePtr get_interface(const c10::QualifiedName& name) const {
     auto type = get_type(name);
     if (!type) {

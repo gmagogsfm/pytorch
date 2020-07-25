@@ -1,4 +1,5 @@
 #include <torch/csrc/jit/python/python_sugared_value.h>
+#include <pybind11/pytypes.h>
 #include <torch/csrc/Dtype.h>
 #include <torch/csrc/Layout.h>
 #include <torch/csrc/MemoryFormat.h>
@@ -401,6 +402,47 @@ std::shared_ptr<SugaredValue> SugaredDict::attr(
   TORCH_INTERNAL_ASSERT(false);
 }
 
+std::shared_ptr<SugaredEnumClass> SugaredEnumClass::create(
+    const py::object& obj,
+    Function& m,
+    const SourceRange& loc) {
+  auto annotation_type = py::module::import("torch.jit.annotations")
+                             .attr("try_ann_to_type")(obj, loc);
+  TORCH_INTERNAL_ASSERT(!annotation_type.is_none());
+  auto type = py::cast<TypePtr>(annotation_type);
+  auto enum_type = type->expect<EnumType>();
+
+  std::map<std::string, SugaredValuePtr> enum_values;
+  auto enum_values_list = py::cast<py::list>(obj);
+  for (auto enum_value : enum_values_list) {
+    auto enum_name = enum_value.attr("name").cast<std::string>();
+    auto enum_sugared_value =
+        toSugaredValue(py::reinterpret_steal<py::object>(enum_value), m, loc);
+    enum_values.insert(std::make_pair(enum_name, enum_sugared_value));
+  }
+  return std::make_shared<SugaredEnumClass>(enum_values, enum_type);
+}
+
+std::shared_ptr<SugaredValue> SugaredEnumClass::attr(
+    const SourceRange& loc,
+    Function& m,
+    const std::string& field) {
+  std::ignore = loc;
+  std::ignore = m;
+
+  auto it = enum_values_.find(field);
+  if (it == enum_values_.end()) {
+    throw ErrorReport(loc) << enum_type_->repr_str() << "'"
+                           << " has no attribute '" << field << "'";
+  }
+  return it->second;
+}
+
+SugaredValuePtr SugaredEnumClass::iter(const SourceRange& loc, Function& m) {
+  // TODO(gmagogsfm): Implement getting iterator.
+  TORCH_INTERNAL_ASSERT(false);
+}
+
 // helper function for instantiating a SugaredValue from an IValue
 std::shared_ptr<SugaredValue> toSugaredValue(
     const IValue& v,
@@ -706,6 +748,37 @@ TypePtr registerNamedTuple(const py::object& obj, const SourceRange& loc) {
   return tt;
 }
 
+bool isEnumClass(py::object obj) {
+  py::bool_ is_class = py::module::import("inspect").attr("isclass")(obj);
+  if (!py::cast<bool>(is_class)) {
+    return false;
+  }
+
+  static auto enum_module_obj = PyImport_ImportModule("enum");
+  TORCH_CHECK(enum_module_obj, "Unable to import enum module");
+  static auto enum_type_obj = PyObject_GetAttrString(enum_module_obj, "Enum");
+  TORCH_CHECK(enum_module_obj, "Unable to import enum.Enum class");
+
+  int ret = PyObject_IsSubclass(obj.ptr(), enum_type_obj);
+  return ret == 1;
+}
+
+std::shared_ptr<SugaredValue> createSimpleEnumValue(
+    const py::object& obj,
+    Function& m,
+    const SourceRange& loc) {
+  auto enum_class = obj.attr("__class__");
+  py::str qualifiedName = py::module::import("torch._jit_internal")
+                              .attr("_qualified_name")(enum_class);
+  auto qualname = c10::QualifiedName(qualifiedName);
+  auto pyCu = get_python_cu();
+  auto value = toSugaredValue(obj.attr("value"), m, loc, /*is_constant=*/true)
+                   ->asValue(loc, m);
+  EnumTypePtr enum_type = EnumType::create(qualname, value->type(), pyCu);
+  auto enum_ivalue = toIValue(obj, enum_type);
+  return toSimple(m.graph()->insertConstant(enum_ivalue, loc));
+}
+
 std::shared_ptr<SugaredValue> toSugaredValue(
     py::object obj,
     Function& m,
@@ -818,12 +891,23 @@ std::shared_ptr<SugaredValue> toSugaredValue(
     return std::make_shared<NamedTupleConstructor>(tuple_type);
   }
 
-  py::bool_ isClass = py::module::import("inspect").attr("isclass")(obj);
-  if (py::cast<bool>(isClass)) {
+  if (isEnumClass(obj)) {
+    return SugaredEnumClass::create(obj, m, loc);
+  }
+
+  auto enum_type = py::module::import("enum").attr("Enum");
+  py::bool_ isEnumValue = py::isinstance(obj, enum_type);
+  if (py::cast<bool>(isEnumValue)) {
+    return createSimpleEnumValue(obj, m, loc);
+  }
+
+  py::bool_ is_class = py::module::import("inspect").attr("isclass")(obj);
+  if (py::cast<bool>(is_class)) {
     py::str qualifiedName =
         py::module::import("torch._jit_internal").attr("_qualified_name")(obj);
     auto pyCu = get_python_cu();
     auto qualname = c10::QualifiedName(qualifiedName);
+
     if (auto classType = pyCu->get_class(qualname)) {
       return std::make_shared<PythonClassValue>(classType, obj);
     } else {

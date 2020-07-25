@@ -730,16 +730,12 @@ inline IValue toIValue(
     case TypeKind::AnyEnumType:
       break;
     case TypeKind::EnumType:
+      EnumTypePtr enum_type = type->expect<EnumType>();
       py::object py_obj = py::reinterpret_borrow<py::object>(obj);
-      std::string qualified_class_name_str =
-          py::cast<std::string>(py::module::import("torch._jit_internal")
-                                    .attr("_qualified_name")(py_obj));
-      c10::QualifiedName qualified_class_name(qualified_class_name_str);
       std::string name = py::cast<std::string>(obj.attr("name"));
-      IValue value = toIValue(
-          obj.attr("value"), type->cast<EnumType>()->getValueType(), {});
-      auto enum_holder = c10::make_intrusive<c10::ivalue::EnumHolder>(
-          qualified_class_name, name, value);
+      IValue value = toIValue(obj.attr("value"), enum_type->getValueType(), {});
+      auto enum_holder =
+          c10::make_intrusive<c10::ivalue::EnumHolder>(enum_type, name, value);
       return IValue(enum_holder);
   }
   throw py::cast_error(c10::str(
@@ -927,6 +923,10 @@ inline py::object toPyObject(IValue ivalue) {
 #else
     TORCH_CHECK(false, "RRef is only supported with the distributed package");
 #endif
+//  } else if (ivalue.isEnum()) {
+//    auto enum_holder = ivalue.toEnumHolder();
+//    auto enum_py_class = py::module::import(enum_holder->qualifiedClassName().c_str());
+//    return enum_py_class.attr(enum_holder->name().c_str());
   } else {
     AT_ERROR(
         "Missing cases in 'toPyObject'! Can't convert ",
