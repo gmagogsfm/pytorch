@@ -55,12 +55,11 @@ TupleTypePtr Tuple::type() const {
 }
 
 bool operator==(const ivalue::EnumHolder& lhs, const ivalue::EnumHolder& rhs) {
-  return lhs.name() == rhs.name() && lhs.value() == rhs.value() &&
-      *rhs.type() == *lhs.type();
+  return lhs.name() == rhs.name() && *rhs.type() == *lhs.type();
 }
 
 const std::string ivalue::EnumHolder::qualifiedClassName() const {
-  return type_->qualifiedClassName().name();
+  return type_->qualifiedClassName().qualifiedName();
 }
 
 } // namespace ivalue
@@ -455,7 +454,7 @@ std::ostream& IValue::repr(
 }
 
 std::ostream& operator<<(std::ostream& out, const ivalue::EnumHolder& v) {
-  out << v.qualifiedClassName() << "." << v.name() << "(" << v.value() << ")";
+  out << v.qualifiedClassName() << "." << v.name();
   return out;
 }
 

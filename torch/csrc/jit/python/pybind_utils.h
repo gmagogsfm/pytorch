@@ -2,8 +2,10 @@
 
 #include <ATen/core/ivalue.h>
 #include <ATen/core/jit_type.h>
+#include <ATen/core/qualified_name.h>
 #include <ATen/core/stack.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
 #include <torch/csrc/Device.h>
 #include <torch/csrc/Dtype.h>
 #include <torch/csrc/Layout.h>
@@ -284,6 +286,16 @@ inline InferredType tryToInferType(py::handle input) {
     return InferredType(IntType::get());
   } else if (THPLayout_Check(input.ptr())) {
     return InferredType(IntType::get());
+  }
+
+  auto enum_type = py::module::import("enum").attr("Enum");
+  py::bool_ isEnumValue = py::isinstance(input, enum_type);
+  if (py::cast<bool>(isEnumValue)) {
+    auto enum_class = input.attr("__class__");
+    auto enum_type = py::cast<TypePtr>(
+        py::module::import("torch.jit.annotations")
+            .attr("try_ann_to_type")(enum_class, SourceRange()));
+    return InferredType(enum_type);
   }
 
   py::bool_ isClass =
@@ -894,7 +906,7 @@ inline py::object toPyObject(IValue ivalue) {
       std::stringstream err;
       err << "Unknown reference to ScriptClass ";
       err << obj->name();
-      err << ". Did you forget to import it?)";
+      err << ". (Did you forget to import it?)";
       throw std::runtime_error(err.str());
     }
     auto pyObj = pyClass.attr("__new__")(pyClass);
@@ -915,6 +927,20 @@ inline py::object toPyObject(IValue ivalue) {
     return py::cast(ivalue.toCapsule());
   } else if (ivalue.isFuture()) {
     return py::cast(std::make_shared<PythonFutureWrapper>(ivalue.toFuture()));
+  } else if (ivalue.isEnum()) {
+    auto enum_holder = ivalue.toEnumHolder();
+    auto qualified_class_name = enum_holder->qualifiedClassName();
+
+    auto py_class = py::module::import("torch.jit._state")
+                        .attr("_get_script_class")(qualified_class_name);
+    if (py_class.is_none()) {
+      std::stringstream err;
+      err << "Unknown reference to ScriptClass ";
+      err << qualified_class_name;
+      err << ". (Did you forget to import it?)";
+      throw std::runtime_error(err.str());
+    }
+    return py_class.attr(enum_holder->name().c_str());
   } else if (ivalue.isRRef()) {
 #ifdef USE_DISTRIBUTED
     return py::cast(torch::distributed::rpc::PyRRef(
@@ -923,10 +949,6 @@ inline py::object toPyObject(IValue ivalue) {
 #else
     TORCH_CHECK(false, "RRef is only supported with the distributed package");
 #endif
-//  } else if (ivalue.isEnum()) {
-//    auto enum_holder = ivalue.toEnumHolder();
-//    auto enum_py_class = py::module::import(enum_holder->qualifiedClassName().c_str());
-//    return enum_py_class.attr(enum_holder->name().c_str());
   } else {
     AT_ERROR(
         "Missing cases in 'toPyObject'! Can't convert ",

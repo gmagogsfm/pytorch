@@ -290,13 +290,6 @@ TEST(IValueTest, EnumEquality) {
       IValue(c10::make_intrusive<ivalue::EnumHolder>(
           int_enum_type1, "enum_name_1", IValue(1))),
       IValue(c10::make_intrusive<ivalue::EnumHolder>(
-          int_enum_type1, "enum_name_1", IValue(2)))
-  );
-
-  EXPECT_NE(
-      IValue(c10::make_intrusive<ivalue::EnumHolder>(
-          int_enum_type1, "enum_name_1", IValue(1))),
-      IValue(c10::make_intrusive<ivalue::EnumHolder>(
           string_enum_type, "enum_name_1", IValue("1")))
   );
 }

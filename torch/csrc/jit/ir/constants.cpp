@@ -181,7 +181,7 @@ c10::optional<IValue> toIValue(const Value* v) {
     return d;
   } else if (node->mustBeNone()) {
     return IValue();
-  } else if (type->isSubtypeOf(AnyEnumType::get())) {
+  } else if (type->cast<EnumType>()) {
     const auto& enum_val = node->ival(attr::value);
     return enum_val;
   } else {

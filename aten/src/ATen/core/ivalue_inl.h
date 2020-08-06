@@ -551,7 +551,7 @@ struct ivalue::EnumHolder : c10::intrusive_ptr_target {
       std::ostream& out,
       const EnumHolder& v);
 
-  const std::string qualifiedClassName() const;
+  CAFFE2_API const std::string qualifiedClassName() const;
 
   const std::string& name() const {
     return name_;
@@ -637,6 +637,7 @@ DEFINE_TO(at::ScalarType, toScalarType)
 DEFINE_TO(at::Layout, toLayout)
 DEFINE_TO(at::MemoryFormat, toMemoryFormat)
 DEFINE_TO(at::QScheme, toQScheme)
+DEFINE_TO(at::Dimname, toDimname)
 DEFINE_TO(at::Generator, toGenerator)
 
 template <class T>
@@ -1022,7 +1023,8 @@ inline IValue::IValue(c10::intrusive_ptr<c10::RRefInterface> v)
   payload.as_intrusive_ptr = v.release();
 }
 inline const std::string& IValue::toStringRef() const {
-  return toString()->string();
+  AT_ASSERT(isString(), "Expected String but got ", tagKind());
+  return static_cast<const c10::ivalue::ConstantString*>(payload.as_intrusive_ptr)->string();
 }
 
 inline PyObject* IValue::toPyObject() const {

@@ -253,7 +253,9 @@ SugaredValuePtr ModuleValue::getitem(
       throw ErrorReport(loc) << "Key Error, " << idx_str;
     }
     throw ErrorReport(loc)
-        << "Unable to extract string literal index. ModuleDict indexing is only supported with string literals.";
+        << "Unable to extract string literal index. "
+        << "ModuleDict indexing is only supported with string literals. "
+        << "Enumeration of ModuleDict is supported, e.g. 'for k, v in self.items(): ...'";
   }
   throw ErrorReport(loc)
       << "Only ModuleList, Sequential, and ModuleDict modules are subscriptable";
@@ -425,11 +427,8 @@ std::shared_ptr<SugaredEnumClass> SugaredEnumClass::create(
 
 std::shared_ptr<SugaredValue> SugaredEnumClass::attr(
     const SourceRange& loc,
-    Function& m,
+    Function& /*m*/,
     const std::string& field) {
-  std::ignore = loc;
-  std::ignore = m;
-
   auto it = enum_values_.find(field);
   if (it == enum_values_.end()) {
     throw ErrorReport(loc) << enum_type_->repr_str() << "'"
@@ -697,6 +696,36 @@ std::shared_ptr<SugaredValue> BooleanDispatchValue::call(
   return value->call(loc, caller, inputs, attributes, n_binders);
 }
 
+std::shared_ptr<SugaredValue> PythonExceptionValue::call(
+    const SourceRange& loc,
+    Function& caller,
+    at::ArrayRef<NamedValue> inputs,
+    at::ArrayRef<NamedValue> attributes,
+    size_t /*n_binders*/) {
+  Value* error_message = nullptr;
+  if (inputs.size() == 0) {
+    error_message = insertConstant(*caller.graph(), "", loc);
+  } else if (inputs.size() == 1) {
+    error_message = inputs.at(0).value(*caller.graph());
+  } else {
+    std::vector<Value*> message_values;
+    message_values.reserve(inputs.size() + attributes.size());
+
+    for (auto inp : inputs) {
+      message_values.push_back(inp.value(*caller.graph()));
+    }
+    for (auto kwarg_inp : attributes) {
+      message_values.push_back(kwarg_inp.value(*caller.graph()));
+    }
+    error_message =
+        caller.graph()
+            ->insertNode(caller.graph()->createTuple(message_values))
+            ->output();
+  }
+
+  return std::make_shared<ExceptionMessageValue>(error_message);
+}
+
 bool isNamedTupleClass(const py::object& obj) {
   auto tuple_type = reinterpret_cast<PyObject*>(&PyTuple_Type);
   return PyObject_IsSubclass(obj.ptr(), tuple_type) &&
@@ -754,12 +783,9 @@ bool isEnumClass(py::object obj) {
     return false;
   }
 
-  static auto enum_module_obj = PyImport_ImportModule("enum");
-  TORCH_CHECK(enum_module_obj, "Unable to import enum module");
-  static auto enum_type_obj = PyObject_GetAttrString(enum_module_obj, "Enum");
-  TORCH_CHECK(enum_module_obj, "Unable to import enum.Enum class");
-
-  int ret = PyObject_IsSubclass(obj.ptr(), enum_type_obj);
+  auto enum_type_obj =
+      py::cast<py::object>(py::module::import("enum").attr("Enum"));
+  int ret = PyObject_IsSubclass(obj.ptr(), enum_type_obj.ptr());
   return ret == 1;
 }
 
@@ -768,13 +794,9 @@ std::shared_ptr<SugaredValue> createSimpleEnumValue(
     Function& m,
     const SourceRange& loc) {
   auto enum_class = obj.attr("__class__");
-  py::str qualifiedName = py::module::import("torch._jit_internal")
-                              .attr("_qualified_name")(enum_class);
-  auto qualname = c10::QualifiedName(qualifiedName);
-  auto pyCu = get_python_cu();
-  auto value = toSugaredValue(obj.attr("value"), m, loc, /*is_constant=*/true)
-                   ->asValue(loc, m);
-  EnumTypePtr enum_type = EnumType::create(qualname, value->type(), pyCu);
+  auto enum_type =
+      py::cast<TypePtr>(py::module::import("torch.jit.annotations")
+                            .attr("try_ann_to_type")(enum_class, loc));
   auto enum_ivalue = toIValue(obj, enum_type);
   return toSimple(m.graph()->insertConstant(enum_ivalue, loc));
 }
@@ -867,6 +889,11 @@ std::shared_ptr<SugaredValue> toSugaredValue(
         Symbol::fromQualString(py::str(builtin_name)), c10::nullopt);
   }
 
+  if (py::cast<bool>(py::module::import("torch._jit_internal")
+                         .attr("_is_exception")(obj))) {
+    return std::make_shared<PythonExceptionValue>(obj);
+  }
+
   if (py::isinstance<py::function>(obj)) {
     if (typeString(obj) == "builtin_function_or_method") {
       throw ErrorReport(loc) << "Python builtin " << py::str(obj)
@@ -896,8 +923,8 @@ std::shared_ptr<SugaredValue> toSugaredValue(
   }
 
   auto enum_type = py::module::import("enum").attr("Enum");
-  py::bool_ isEnumValue = py::isinstance(obj, enum_type);
-  if (py::cast<bool>(isEnumValue)) {
+  py::bool_ is_enum_value = py::isinstance(obj, enum_type);
+  if (py::cast<bool>(is_enum_value)) {
     return createSimpleEnumValue(obj, m, loc);
   }
 
