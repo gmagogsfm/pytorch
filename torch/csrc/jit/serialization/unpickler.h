@@ -10,8 +10,7 @@ namespace jit {
 using TypeResolver =
     std::function<c10::StrongTypePtr(const c10::QualifiedName&)>;
 
-using ObjLoader = std::function<
-    c10::intrusive_ptr<c10::ivalue::Object>(at::StrongTypePtr, IValue)>;
+using ObjLoader = std::function<c10::IValue(at::StrongTypePtr, IValue)>;
 
 // [unpickler refactor] there is some cruft around PickleOpCode::BUILD,
 // PickleOpCode::NEWOBJ, and the last_opcode_ member below that should be

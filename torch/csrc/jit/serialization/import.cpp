@@ -1,5 +1,6 @@
 #include <torch/csrc/jit/serialization/import.h>
 #include <ATen/core/functional.h>
+#include <ATen/core/ivalue_inl.h>
 #include <c10/util/Exception.h>
 #include <torch/csrc/jit/serialization/import_export_helpers.h>
 #ifndef C10_MOBILE
@@ -144,35 +145,48 @@ IValue ScriptModuleDeserializer::readArchive(const std::string& archive_name) {
   // Method.run() and graph executor, etc.
   // For bytecode import we need to decouple these dependencies.
   auto obj_loader = [&](at::StrongTypePtr type, IValue input) {
-    auto cls = type.type_->expect<at::ClassType>();
-    auto qn = cls->name();
-    size_t n = cls->numAttributes();
-    if (checkHasValidSetGetState(cls)) {
-      auto obj = c10::ivalue::Object::create(type, n);
-      // XXX: Do not optimize __setstate__, so that we don't try to
-      // specialize the class before it is initialized.
-      GraphOptimizerEnabledGuard guard(false);
-      Function& set_state = cls->getMethod("__setstate__");
-      // since we are in the middle of unpickling we might still have lists and
-      // dicts that do not have accurate tags (e.g. they report they are
-      // List[Any]). But we need to run __setstate__ which will check the input
-      // type and may access the tags. Since setstate has a known input type, we
-      // can correctly restore the tags now by apply the input type of set_state
-      // to the state object being passed.
-      // TODO: Remove once [serialization type tags] is landed
-      restoreAccurateTypeTags(
-          input, set_state.getSchema().arguments().at(1).type());
-      set_state({obj, input});
-      postSetStateValidate(obj);
-      return obj;
-    } else {
-      auto dict = std::move(input).toGenericDict();
-      auto obj = c10::ivalue::Object::create(type, n);
-      for (size_t i = 0; i < n; ++i) {
-        obj->setSlot(i, dict.at(cls->getAttributeName(i)));
+    if (auto enum_type = type.type_->cast<EnumType>()) {
+      for (const auto& p : enum_type->enumNamesValues()) {
+        if (p.second == input) {
+          auto enum_holder = c10::make_intrusive<at::ivalue::EnumHolder>(
+              enum_type, p.first, p.second);
+          return at::IValue(enum_holder);
+        }
       }
-      return obj;
     }
+
+    if (auto class_type = type.type_->cast<at::ClassType>()) {
+      auto qn = class_type->name();
+      size_t n = class_type->numAttributes();
+      if (checkHasValidSetGetState(class_type)) {
+        auto obj = c10::ivalue::Object::create(type, n);
+        // XXX: Do not optimize __setstate__, so that we don't try to
+        // specialize the class before it is initialized.
+        GraphOptimizerEnabledGuard guard(false);
+        Function& set_state = class_type->getMethod("__setstate__");
+        // since we are in the middle of unpickling we might still have lists
+        // and dicts that do not have accurate tags (e.g. they report they are
+        // List[Any]). But we need to run __setstate__ which will check the
+        // input type and may access the tags. Since setstate has a known input
+        // type, we can correctly restore the tags now by apply the input type
+        // of set_state to the state object being passed.
+        // TODO: Remove once [serialization type tags] is landed
+        restoreAccurateTypeTags(
+            input, set_state.getSchema().arguments().at(1).type());
+        set_state({obj, input});
+        postSetStateValidate(obj);
+        return at::IValue(obj);
+      } else {
+        auto dict = std::move(input).toGenericDict();
+        auto obj = c10::ivalue::Object::create(type, n);
+        for (size_t i = 0; i < n; ++i) {
+          obj->setSlot(i, dict.at(class_type->getAttributeName(i)));
+        }
+        return at::IValue(obj);
+      }
+    }
+
+    AT_ASSERT(false, "Unsupported type for pickled global objects");
   };
 
   return readArchiveAndTensors(
