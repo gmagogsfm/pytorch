@@ -138,7 +138,7 @@ bool ProcessGroupMPI::AsyncWork::isSuccess() const {
   return status_.MPI_ERROR == MPI_SUCCESS;
 }
 
-int ProcessGroupMPI::AsyncWork::sourceRank() const {
+int64_t ProcessGroupMPI::AsyncWork::sourceRank() const {
   return status_.MPI_SOURCE;
 }
 

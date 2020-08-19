@@ -3,6 +3,7 @@ import torch
 import warnings
 from torch._six import string_classes
 from datetime import timedelta
+from typing import Optional
 
 # This module is wildcard imported from torch.distributed.
 # TODO: specify __all__
@@ -42,6 +43,8 @@ try:
     from. import ProcessGroupGloo
 except ImportError:
     _GLOO_AVAILABLE = False
+
+from . import ProcessGroup
 
 
 class Backend(object):
@@ -130,14 +133,16 @@ class reduce_op(object):
 reduce_op = reduce_op()
 
 
-class group(object):
-    WORLD = object()
+class GroupType(object):
+    def __init__(self):
+        self.WORLD = None
 
+group = GroupType()
 
 class GroupMember(object):
     # Alias to group.WORLD for backward compatibility
     WORLD = group.WORLD
-    NON_GROUP_MEMBER = object()
+    NON_GROUP_MEMBER = None
 
 
 # Cached process groups
@@ -164,7 +169,7 @@ def _rank_not_in_group(group):
     """
     if group == GroupMember.WORLD:
         return False
-    return group == GroupMember.NON_GROUP_MEMBER
+    return group is None
 
 
 def _get_group_rank(group, rank):
@@ -379,6 +384,7 @@ def init_process_group(backend,
     global _backend
     global _default_pg
     global _default_pg_init_method
+    global group
 
     if not isinstance(timeout, timedelta):
         raise RuntimeError("Expected timeout argument to be of type"
@@ -435,6 +441,7 @@ def init_process_group(backend,
     _pg_group_ranks[_default_pg] = {i: i for i in range(_default_pg.size())}
     _backend = _pg_map[_default_pg][0]
     _default_pg_init_method = init_method
+    group.WORLD = _default_pg
 
 
 def _new_process_group_helper(world_size,
@@ -481,7 +488,7 @@ def _new_process_group_helper(world_size,
                 " source on a host that has MPI installed.")
         pg = ProcessGroupMPI.create(group_ranks)
         if not pg:
-            return GroupMember.NON_GROUP_MEMBER
+            return None
         _pg_map[pg] = (Backend.MPI, None)
         _pg_names[pg] = group_name
     else:
@@ -490,7 +497,7 @@ def _new_process_group_helper(world_size,
         if not is_default_group:
             global_rank = _default_pg.rank()
             if global_rank not in group_ranks:
-                return GroupMember.NON_GROUP_MEMBER
+                return None
 
         # Use the group name as prefix in the default store, such that
         # a single store can be reused by multiple groups.
@@ -544,7 +551,7 @@ def destroy_process_group(group=group.WORLD):
     global _default_pg_init_method
     global _group_count
 
-    if group == GroupMember.NON_GROUP_MEMBER:
+    if group is None:
         return
 
     if group == GroupMember.WORLD:
@@ -1763,7 +1770,7 @@ def all_to_all_single(output,
 
 def all_to_all(output_tensor_list,
                input_tensor_list,
-               group=group.WORLD,
+               group: Optional[torch.classes.dist_c10d.ProcessGroup] = None,
                async_op=False):
     """
     Each process scatters list of input tensors to all processes in a group and
@@ -1834,6 +1841,10 @@ def all_to_all(output_tensor_list,
         [tensor([4]), tensor([15, 16]), tensor([23]), tensor([34, 35])]              # Rank 2
         [tensor([5]), tensor([17, 18]), tensor([24]), tensor([36])]                  # Rank 3
     """
+    global _default_pg
+    if group is None:
+        group = _default_pg
+
     if _rank_not_in_group(group):
         return
 
@@ -1841,11 +1852,12 @@ def all_to_all(output_tensor_list,
     _check_tensor_list(output_tensor_list, "output_tensor_list")
     _check_tensor_list(input_tensor_list, "input_tensor_list")
 
-    if group == GroupMember.WORLD:
-        _check_default_pg()
-        work = _default_pg.alltoall(output_tensor_list, input_tensor_list, opts)
-    else:
-        work = group.alltoall(output_tensor_list, input_tensor_list, opts)
+    work = group.alltoall(output_tensor_list, input_tensor_list, opts)
+#    if group == GroupMember.WORLD:
+#        _check_default_pg()
+#        work = _default_pg.alltoall(output_tensor_list, input_tensor_list, opts)
+#    else:
+#        work = group.alltoall(output_tensor_list, input_tensor_list, opts)
 
     if async_op:
         return work
