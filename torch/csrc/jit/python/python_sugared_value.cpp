@@ -634,8 +634,9 @@ std::shared_ptr<SugaredValue> PythonClassValue::attr(
     const std::string& field) {
   // Resolve values from the Python object first (e.g. for static methods on
   // this type, resolve them as functions)
+  auto has_attr = py::hasattr(py_type_, field.c_str());
   auto py_attr = py::getattr(py_type_, field.c_str(), py::none());
-  if (!py_attr.is_none()) {
+  if (py::cast<bool>(has_attr) || !py_attr.is_none()) {
     return toSugaredValue(py_attr, m, loc);
   }
 

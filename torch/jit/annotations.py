@@ -18,11 +18,6 @@ from torch._six import builtins
 from torch._utils_internal import get_source_lines_and_file
 
 
-if torch.distributed.rpc.is_available():
-    from .._jit_internal import RRef, is_rref
-    from torch._C import RRefType
-
-
 class Module(object):
     def __init__(self, name, members):
         self.name = name
@@ -49,7 +44,7 @@ class EvalEnv(object):
 
     def __init__(self, rcb):
         self.rcb = rcb
-        if torch.distributed.rpc.is_available():
+        if torch.distributed.is_available():
             self.env['RRef'] = RRef
 
     def __getitem__(self, name):
@@ -270,29 +265,43 @@ def is_enum_support_enabled() -> bool:
 
 
 def try_ann_to_type(ann, loc):
+    print("trying to parse annotation {}".format(repr(ann)))
     if ann is None:
+        print("pos1")
         return TensorType.get()
     if inspect.isclass(ann) and issubclass(ann, torch.Tensor):
+        print("pos2")
         return TensorType.get()
     if is_tuple(ann):
+        print("pos3")
         return TupleType([try_ann_to_type(a, loc) for a in ann.__args__])
     if is_list(ann):
+        print("pos4")
         elem_type = try_ann_to_type(ann.__args__[0], loc)
         if elem_type:
+            print("pos5")
             return ListType(elem_type)
     if is_dict(ann):
+        print("pos6")
         key = try_ann_to_type(ann.__args__[0], loc)
         value = try_ann_to_type(ann.__args__[1], loc)
         return DictType(key, value)
     if is_optional(ann):
+        print("pos7")
         if issubclass(ann.__args__[1], type(None)):
+            print("pos8")
             valid_type = try_ann_to_type(ann.__args__[0], loc)
         else:
+            print("pos9")
             valid_type = try_ann_to_type(ann.__args__[1], loc)
         assert valid_type, "Unsupported annotation {} could not be resolved.".format(repr(ann))
         return OptionalType(valid_type)
-    if torch.distributed.rpc.is_available() and is_rref(ann):
-        return RRefType(try_ann_to_type(ann.__args__[0], loc))
+    if torch.distributed.is_available():
+        print("pos10")
+        from torch.distributed.rpc import is_rref
+        if is_rref(ann):
+            from torch._C import RRefType
+            return RRefType(try_ann_to_type(ann.__args__[0], loc))
     if is_future(ann):
         return FutureType(try_ann_to_type(ann.__args__[0], loc))
     if ann is float:
@@ -306,26 +315,36 @@ def try_ann_to_type(ann, loc):
     if ann is Any:
         return AnyType.get()
     if ann is type(None):
+        print("pos11")
         return NoneType.get()
     if inspect.isclass(ann) and hasattr(ann, "__torch_script_interface__"):
+        print("pos12")
         return InterfaceType(_qualified_name(ann))
     if ann is torch.device:
+        print("pos13")
         return DeviceObjType.get()
     if ann is torch.dtype:
+        print("pos14")
         return IntType.get()  # dtype not yet bound in as its own type
     if inspect.isclass(ann) and issubclass(ann, enum.Enum):
+        print("pos15")
         if not is_enum_support_enabled():
             warnings.warn("Enum support is work in progress, enum class {}"
                           " is not compiled".format(ann))
             return None
         return EnumType(_qualified_name(ann), get_enum_value_type(ann, loc))
     if inspect.isclass(ann):
+        print("pos16")
         if hasattr(ann, "__torch_script_class__"):
+            print("pos17")
             return ClassType(_qualified_name(ann))
         ignored_builtin_classes = (torch.nn.Module, tuple, list, Exception)
         if torch._jit_internal.can_compile_class(ann) and not issubclass(ann, ignored_builtin_classes):
+            print("pos18")
             torch.jit._script._recursive_compile_class(ann, loc)
             return ClassType(_qualified_name(ann))
+
+    print("pos20")
 
     # Maybe resolve a NamedTuple to a Tuple Type
     def fake_rcb(key):

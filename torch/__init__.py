@@ -428,6 +428,8 @@ for name in dir(_C._VariableFunctions):
     globals()[name] = getattr(_C._VariableFunctions, name)
     __all__.append(name)
 
+from torch._classes import classes
+
 ################################################################################
 # Import interface functions defined in Python
 ################################################################################
@@ -500,7 +502,7 @@ def compiled_with_cxx11_abi():
 
 # Import the ops "namespace"
 from torch._ops import ops
-from torch._classes import classes
+#from torch._classes import classes
 
 # Import the quasi random sampler
 import torch.quasirandom
